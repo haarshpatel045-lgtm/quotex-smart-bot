@@ -1,148 +1,122 @@
+import os
 import time
 import requests
 import pandas as pd
-import numpy as np
-import datetime
-from threading import Thread
-from flask import Flask
 
-# ========================================================
-# ⚙️ વેબ સર્વર સેટિંગ (ક્લાઉડ બોટને જીવતો રાખવા માટે)
-# ========================================================
-app = Flask('')
+# --- CONFIGURATION ---
+TOKEN = os.getenv("TELEGRAM_TOKEN", "YOUR_TELEGRAM_TOKEN")
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "YOUR_TELEGRAM_CHAT_ID")
+SYMBOL = "EURUSD"
+INTERVAL = "5m"
 
-@app.route('/')
-def home():
-    return "Quotex Smart Bot is running live 24/7!"
-
-def run_web_server():
-    # ક્લાઉડ સર્વર આપોઆપ પોર્ટ સેટ કરશે, ડિફોલ્ટ ૮૦૮૦ રાખ્યો છે
-    app.run(host='0.0.0.0', port=8080)
-
-# ========================================================
-# ⚙️ તમારા ટેલિગ્રામ સેટિંગ્સ
-# ========================================================
-TELEGRAM_TOKEN = "8539958945:AAG2lBFKKvi_wYPSMh9Utpx3fAMOtagsd5s"
-TELEGRAM_CHAT_ID = "647373758"
-
-last_signal_minutes = {
-    "EURUSDT": -1,
-    "GBPUSDT": -1
-}
+# સાચા ક્રોસઓવરને ફિલ્ટર કરવા માટેનો પાકો ગેપ (Threshold)
+# આનાથી લાઈનો માત્ર ટચ થશે તો ફેક સિગ્નલ નહીં બને
+GAP_THRESHOLD = 0.00005  
 
 def send_telegram_message(message):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": message,
-        "parse_mode": "Markdown"
-    }
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    payload = {"chat_id": CHAT_ID, "text": message, "parse_mode": "Markdown"}
     try:
-        requests.post(url, json=payload, timeout=10)
-    except:
-        pass
+        requests.post(url, json=payload)
+    except Exception as e:
+        print(f"Telegram Error: {e}")
 
-def get_real_live_data(symbol):
+def get_binance_data(symbol, interval, limit=100):
+    url = f"https://api.binance.com/api/v3/klines"
+    params = {"symbol": symbol, "interval": interval, "limit": limit}
     try:
-        url = "https://api.binance.com/api/v3/klines"
-        params = {"symbol": symbol, "interval": "5m", "limit": 50}
-        response = requests.get(url, params=params, timeout=10)
+        response = requests.get(url, params=params)
         data = response.json()
-        
-        candles = []
-        for c in data:
-            candles.append({
-                'close': float(c[4]),
-                'high': float(c[2]),
-                'low': float(c[3]),
-                'volume': float(c[5])
-            })
-        return pd.DataFrame(candles)
-    except:
+        df = pd.DataFrame(data, columns=[
+            'time', 'open', 'high', 'low', 'close', 'volume',
+            'close_time', 'qav', 'num_trades', 'taker_base', 'taker_quote', 'ignore'
+        ])
+        df['close'] = df['close'].astype(float)
+        return df
+    except Exception as e:
+        print(f"Data Fetch Error: {e}")
         return None
 
 def calculate_indicators(df):
-    if df is None or len(df) < 20:
-        return None
-        
-    df['EMA_20'] = df['close'].ewm(span=20, adjust=False).mean()
-    df['EMA_50'] = df['close'].ewm(span=50, adjust=False).mean()
+    # MACD ગણતરી (12, 26, 9)
+    exp1 = df['close'].ewm(span=12, adjust=False).mean()
+    exp2 = df['close'].ewm(span=26, adjust=False).mean()
+    df['macd'] = exp1 - exp2
+    df['signal'] = df['macd'].ewm(span=9, adjust=False).mean()
     
-    df['EMA_12'] = df['close'].ewm(span=12, adjust=False).mean()
-    df['EMA_26'] = df['close'].ewm(span=26, adjust=False).mean()
-    df['MACD_Line'] = df['EMA_12'] - df['EMA_26']
-    df['Signal_Line'] = df['MACD_Line'].ewm(span=9, adjust=False).mean()
-    
+    # RSI ગણતરી (14)
     delta = df['close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=14, min_periods=1).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14, min_periods=1).mean()
-    rs = gain / (loss + 1e-10)
-    df['RSI_14'] = 100 - (100 / (1 + rs))
-    
-    df['Vol_SMA'] = df['volume'].rolling(window=10, min_periods=1).mean()
+    gain = (delta.where(delta > 0, 0)).ewm(alpha=1/14, adjust=False).mean()
+    loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False).mean()
+    rs = gain / loss
+    df['rsi'] = 100 - (100 / (1 + rs))
     return df
 
-def process_live_signals(df, display_symbol, binance_symbol):
-    global last_signal_minutes
-    if df is None:
-        return
-        
-    last_row = df.iloc[-1]
-    prev_row = df.iloc[-2]
-    
-    current_price = last_row['close']
-    ema20 = last_row['EMA_20']
-    ema50 = last_row['EMA_50']
-    macd_line = last_row['MACD_Line']
-    signal_line = last_row['Signal_Line']
-    rsi = last_row['RSI_14']
-    
-    volume_ok = last_row['volume'] > last_row['Vol_SMA']
-    
-    macd_crossed_up = (prev_row['MACD_Line'] <= prev_row['Signal_Line']) and (macd_line > signal_line)
-    macd_crossed_down = (prev_row['MACD_Line'] >= prev_row['Signal_Line']) and (macd_line < signal_line)
-
-    now = datetime.datetime.now()
-    current_minute = now.minute
-
-    if current_minute == last_signal_minutes.get(binance_symbol, -1):
+def check_signals():
+    print("લાઈવ માર્કેટ ડેટા સ્કેન થઈ રહ્યો છે...")
+    df = get_binance_data(SYMBOL, INTERVAL)
+    if df is None or df.empty:
         return
 
-    # 🟢 SMART CALL SIGNAL
-    if (current_price > ema50) and (current_price > ema20) and macd_crossed_up and (53 < rsi < 68) and volume_ok:
-        msg = f"🚀 *QUOTEX CLOUD CALL* 🚀\n\n📊 *Asset:* {display_symbol} (Real)\n🎯 *Direction:* BUY / CALL ⬆️\n⏰ *Expiry:* 5 Minutes\n💰 *Price:* {current_price:.5f}"
-        send_telegram_message(msg)
-        print(f"💥 {display_symbol} CALL સિગ્નલ મોકલ્યો!")
-        last_signal_minutes[binance_symbol] = current_minute
-        
-    # 🔴 SMART PUT SIGNAL
-    elif (current_price < ema50) and (current_price < ema20) and macd_crossed_down and (32 < rsi < 47) and volume_ok:
-        msg = f"🚀 *QUOTEX CLOUD PUT* 🚀\n\n📊 *Asset:* {display_symbol} (Real)\n🎯 *Direction:* SELL / PUT ⬇️\n⏰ *Expiry:* 5 Minutes\n💰 *Price:* {current_price:.5f}"
-        send_telegram_message(msg)
-        print(f"💥 {display_symbol} PUT સિગ્નલ મોકલ્યો!")
-        last_signal_minutes[binance_symbol] = current_minute
-
-def run_live_bot():
-    print("🚀 Cloud Bot મુખ્ય સ્કેનિંગ શરૂ થઈ ગયું છે...")
-    markets = {"EURUSDT": "EUR/USD", "GBPUSDT": "GBP/USD"}
+    df = calculate_indicators(df)
     
-    while True:
-        for symbol, display_name in markets.items():
-            try:
-                df_live = get_real_live_data(symbol)
-                if df_live is not None:
-                    df_indicators = calculate_indicators(df_live)
-                    process_live_signals(df_indicators, display_name, symbol)
-            except:
-                pass
-            time.sleep(0.5)
-        time.sleep(2)
+    # છેલ્લી પૂરી થયેલી કેન્ડલનો ડેટા (Index -2)
+    last_row = df.iloc[-2]
+    # તેની આગળની કેન્ડલનો ડેટા (Index -3) જેથી ક્રોસઓવર ખબર પડે
+    prev_row = df.iloc[-3]
+    
+    macd_now = last_row['macd']
+    signal_now = last_row['signal']
+    rsi_now = last_row['rsi']
+    
+    macd_prev = prev_row['macd']
+    signal_prev = prev_row['signal']
+    
+    # --- ફિલ્ટર સાથે ચેકિંગ ---
+    
+    # 1. CALL / BUY સિગ્નલ (MACD એ સિગ્નલ લાઇનને નીચેથી ઉપર ક્રોસ કરી અને પાકો ગેપ બનાવ્યો)
+    if macd_prev <= signal_prev and (macd_now - signal_now) > GAP_THRESHOLD:
+        if rsi_now > 50:  # RSI કન્ફર્મેશન
+            msg = (
+                f"🚀 *QUOTEX CLOUD CALL* 🚀\n\n"
+                f"📊 *Asset:* {SYMBOL} (Real)\n"
+                f"🎯 *Direction:* BUY / CALL ⬆️\n"
+                f"⏰ *Expiry:* 5 Minutes\n"
+                f"💰 *Price:* {last_row['close']:.5f}\n"
+                f"📈 *RSI:* {rsi_now:.2f}"
+            )
+            send_telegram_message(msg)
+            print("CALL સિગ્નલ મોકલી દીધું!")
+            time.sleep(300) # 5 મિનિટ માટે બોટ શાંત થઈ જશે
+
+    # 2. PUT / SELL સિગ્નલ (MACD એ સિગ્નલ લાઇનને ઉપરથી નીચે ક્રોસ કરી અને પાકો ગેપ બનાવ્યો)
+    elif macd_prev >= signal_prev and (signal_now - macd_now) > GAP_THRESHOLD:
+        if rsi_now < 50:  # RSI કન્ફર્મેશન
+            msg = (
+                f"🚀 *QUOTEX CLOUD CALL* 🚀\n\n"
+                f"📊 *Asset:* {SYMBOL} (Real)\n"
+                f"🎯 *Direction:* PUT / SELL ⬇️\n"
+                f"⏰ *Expiry:* 5 Minutes\n"
+                f"💰 *Price:* {last_row['close']:.5f}\n"
+                f"📉 *RSI:* {rsi_now:.2f}"
+            )
+            send_telegram_message(msg)
+            print("PUT સિગ્નલ મોકલી દીધું!")
+            time.sleep(300) # 5 મિનિટ માટે બોટ શાંત થઈ જશે
 
 if __name__ == "__main__":
-    # વેબ સર્વરને અલગ બેકગ્રાઉન્ડ થ્રેડમાં ચાલુ કરો
-    t = Thread(target=run_web_server)
-    t.start()
+    # ક્લાઉડ પર રન કરવા માટે સિમ્પલ વેબ સર્વર પોર્ટ બાઈન્ડિંગ (Render માટે જરૂરી)
+    from threading import Thread
+    from http.server import SimpleHTTPRequestHandler, HTTPServer
     
-    # મુખ્ય બોટ લોજિક ચાલુ કરો
-    run_live_bot()
-  
+    def run_dummy_server():
+        server_address = ('0.0.0.0', int(os.getenv("PORT", 8080)))
+        httpd = HTTPServer(server_address, SimpleHTTPRequestHandler)
+        httpd.serve_forever()
+        
+    Thread(target=run_dummy_server, daemon=True).start()
+    send_telegram_message("⚡ *Quotex Smart Bot v8 (ફિલ્ટર અપડેટ) લાઈવ થઈ ગયો છે!*")
+    
+    while True:
+        check_signals()
+        time.sleep(10)  # દર ૧૦ સેકન્ડે માર્કેટ ચેક થશે
