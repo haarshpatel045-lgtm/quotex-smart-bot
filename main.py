@@ -9,9 +9,8 @@ CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "YOUR_TELEGRAM_CHAT_ID")
 SYMBOL = "EURUSD"
 INTERVAL = "5m"
 
-# સાચા ક્રોસઓવરને ફિલ્ટર કરવા માટેનો પાકો ગેપ (Threshold)
-# આનાથી લાઈનો માત્ર ટચ થશે તો ફેક સિગ્નલ નહીં બને
-GAP_THRESHOLD = 0.00005  
+# લાઈવ કેન્ડલ પર વારંવાર સિગ્નલ ન પડે તે માટેનો ટાઈમ લોક
+LAST_SIGNAL_TIME = 0  
 
 def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
@@ -53,59 +52,64 @@ def calculate_indicators(df):
     return df
 
 def check_signals():
-    print("લાઈવ માર્કેટ ડેટા સ્કેન થઈ રહ્યો છે...")
+    global LAST_SIGNAL_TIME
+    print("સુપરફાસ્ટ લાઈવ માર્કેટ સ્કેન થઈ રહ્યું છે...")
     df = get_binance_data(SYMBOL, INTERVAL)
     if df is None or df.empty:
         return
 
     df = calculate_indicators(df)
     
-    # છેલ્લી પૂરી થયેલી કેન્ડલનો ડેટા (Index -2)
-    last_row = df.iloc[-2]
-    # તેની આગળની કેન્ડલનો ડેટા (Index -3) જેથી ક્રોસઓવર ખબર પડે
-    prev_row = df.iloc[-3]
+    # --- ૧૦૦% સુપરફાસ્ટ સેટિંગ ---
+    # `df.iloc[-1]` એટલે અત્યારની ચાલુ લાઈવ સેકન્ડની કેન્ડલ
+    current_row = df.iloc[-1]
+    # `df.iloc[-2]` એટલે એની બરાબર પાછળની કેન્ડલ
+    prev_row = df.iloc[-2]
     
-    macd_now = last_row['macd']
-    signal_now = last_row['signal']
-    rsi_now = last_row['rsi']
+    macd_now = current_row['macd']
+    signal_now = current_row['signal']
+    rsi_now = current_row['rsi']
     
     macd_prev = prev_row['macd']
     signal_prev = prev_row['signal']
     
-    # --- ફિલ્ટર સાથે ચેકિંગ ---
+    current_time = time.time()
     
-    # 1. CALL / BUY સિગ્નલ (MACD એ સિગ્નલ લાઇનને નીચેથી ઉપર ક્રોસ કરી અને પાકો ગેપ બનાવ્યો)
-    if macd_prev <= signal_prev and (macd_now - signal_now) > GAP_THRESHOLD:
-        if rsi_now > 50:  # RSI કન્ફર્મેશન
+    # જો છેલ્લો ટ્રેડ લીધાને હજી ૫ મિનિટ (300 સેકન્ડ) ન થઈ હોય, તો નવું સિગ્નલ બ્લોક રાખવું
+    if current_time - LAST_SIGNAL_TIME < 300:
+        return
+
+    # 1. INSTANT CALL / BUY (લાઈવ કેન્ડલ પર જેવો ક્રોસઓવર થાય કે તરત જ)
+    if macd_prev <= signal_prev and macd_now > signal_now:
+        if rsi_now > 50:
             msg = (
-                f"🚀 *QUOTEX CLOUD CALL* 🚀\n\n"
+                f"🚀 *QUOTEX INSTANT CALL* 🚀\n\n"
                 f"📊 *Asset:* {SYMBOL} (Real)\n"
                 f"🎯 *Direction:* BUY / CALL ⬆️\n"
                 f"⏰ *Expiry:* 5 Minutes\n"
-                f"💰 *Price:* {last_row['close']:.5f}\n"
+                f"💰 *Price:* {current_row['close']:.5f}\n"
                 f"📈 *RSI:* {rsi_now:.2f}"
             )
             send_telegram_message(msg)
-            print("CALL સિગ્નલ મોકલી દીધું!")
-            time.sleep(300) # 5 મિનિટ માટે બોટ શાંત થઈ જશે
+            print("ઇન્સ્ટન્ટ CALL સિગ્નલ લાઈવ મોકલ્યું!")
+            LAST_SIGNAL_TIME = current_time
 
-    # 2. PUT / SELL સિગ્નલ (MACD એ સિગ્નલ લાઇનને ઉપરથી નીચે ક્રોસ કરી અને પાકો ગેપ બનાવ્યો)
-    elif macd_prev >= signal_prev and (signal_now - macd_now) > GAP_THRESHOLD:
-        if rsi_now < 50:  # RSI કન્ફર્મેશન
+    # 2. INSTANT PUT / SELL (લાઈવ કેન્ડલ પર જેવો ક્રોસઓવર થાય કે તરત જ)
+    elif macd_prev >= signal_prev and macd_now < signal_now:
+        if rsi_now < 50:
             msg = (
-                f"🚀 *QUOTEX CLOUD CALL* 🚀\n\n"
+                f"🚀 *QUOTEX INSTANT CALL* 🚀\n\n"
                 f"📊 *Asset:* {SYMBOL} (Real)\n"
                 f"🎯 *Direction:* PUT / SELL ⬇️\n"
                 f"⏰ *Expiry:* 5 Minutes\n"
-                f"💰 *Price:* {last_row['close']:.5f}\n"
+                f"💰 *Price:* {current_row['close']:.5f}\n"
                 f"📉 *RSI:* {rsi_now:.2f}"
             )
             send_telegram_message(msg)
-            print("PUT સિગ્નલ મોકલી દીધું!")
-            time.sleep(300) # 5 મિનિટ માટે બોટ શાંત થઈ જશે
+            print("ઇન્સ્ટન્ટ PUT સિગ્નલ લાઈવ મોકલ્યું!")
+            LAST_SIGNAL_TIME = current_time
 
 if __name__ == "__main__":
-    # ક્લાઉડ પર રન કરવા માટે સિમ્પલ વેબ સર્વર પોર્ટ બાઈન્ડિંગ (Render માટે જરૂરી)
     from threading import Thread
     from http.server import SimpleHTTPRequestHandler, HTTPServer
     
@@ -115,8 +119,8 @@ if __name__ == "__main__":
         httpd.serve_forever()
         
     Thread(target=run_dummy_server, daemon=True).start()
-    send_telegram_message("⚡ *Quotex Smart Bot v8 (ફિલ્ટર અપડેટ) લાઈવ થઈ ગયો છે!*")
+    send_telegram_message("⚡ *Quotex SuperFast Bot v9 (લાઈવ કેન્ડલ મોડ) ઓન થઈ ગયો છે!*")
     
     while True:
         check_signals()
-        time.sleep(10)  # દર ૧૦ સેકન્ડે માર્કેટ ચેક થશે
+        time.sleep(5)  # દર ૫ સેકન્ડે લાઈવ રેટ ચેક થશે જેથી ટાઇમિંગ એકદમ પરફેક્ટ રહે
