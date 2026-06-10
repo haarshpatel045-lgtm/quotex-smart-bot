@@ -6,7 +6,7 @@ import pandas as pd
 # --- CONFIGURATION ---
 TOKEN = os.getenv("TELEGRAM_TOKEN", "YOUR_TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "YOUR_TELEGRAM_CHAT_ID")
-SYMBOL = "EURUSD"
+SYMBOLS = ["EURUSD", "GBPUSD"]
 INTERVAL = "5m"
 
 # લાઈવ કેન્ડલ પર વારંવાર સિગ્નલ ન પડે તે માટેનો ટાઈમ લોક
