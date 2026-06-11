@@ -2,35 +2,30 @@ import os
 import time
 import requests
 
-# તમારી નવી વિગતો અહીં અપડેટ કરો
-TOKEN = "8539958945:AAG21BFKKvi_wYPSMh9Utpx3fAM0tagsd5s"
-CHAT_ID = "8539958945"
+TOKEN = "8539958945:AAG21BFKKvi_wYPSMh9Utpx3fAM0tagsd5s" # તમારો નવો ટોકન
 
-def send_message(text):
+def send_message(chat_id, text):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    payload = {"chat_id": CHAT_ID, "text": text}
-    requests.post(url, json=payload)
+    requests.post(url, json={"chat_id": chat_id, "text": text})
 
-def start_bot():
-    send_message("👑 Badshah Bot સક્રિય થઈ ગયો છે! હવે હું લાઈવ માર્કેટ સિગ્નલ આપીશ.")
-    
-    # અહીંથી આપણે દર ૫ સેકન્ડે મેસેજ ચેક કરીશું
+def check_messages():
     last_update_id = 0
     while True:
         url = f"https://api.telegram.org/bot{TOKEN}/getUpdates?offset={last_update_id + 1}"
         try:
-            response = requests.get(url).json()
-            if "result" in response and len(response["result"]) > 0:
-                for update in response["result"]:
+            res = requests.get(url).json()
+            if res.get("result"):
+                for update in res["result"]:
                     last_update_id = update["update_id"]
-                    msg = update["message"].get("text", "").lower()
+                    chat_id = update["message"]["chat"]["id"]
+                    text = update["message"].get("text", "").lower()
                     
-                    if "signal" in msg or "start" in msg:
-                        send_message("✅ સિસ્ટમ તૈયાર છે! ટ્રેડિંગ સેશન માટે બધું ઓકે છે.")
+                    # હવે તમે ગમે તે મેસેજ લખશો, બોટ જવાબ આપશે
+                    send_message(chat_id, f"👑 Badshah Bot એ તમારો મેસેજ '{text}' સાંભળ્યો! બોટ લાઈવ છે.")
         except:
             pass
         time.sleep(2)
 
 if __name__ == "__main__":
-    start_bot()
+    check_messages()
     
