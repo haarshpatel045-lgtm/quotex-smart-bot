@@ -1,42 +1,36 @@
 import os
 import time
 import requests
-import pandas as pd
 
-# તમારા કન્ફિગરેશન (આમાં ફેરફાર કરવાની જરૂર નથી)
-TOKEN = "7759530514:AAHwG6g1yM7Z_r70e5_1Cg3Z3Rlh5vG1p7A"
-CHAT_ID = "8539958945"  # <--- તમારો નવો સાચો આઈડી અહીં સેટ કર્યો છે
-INTERVAL = "5m"
-SYMBOLS = ["USDJPY", "EURUSD", "GBPJPY", "EURJPY", "AUDJPY", "CADJPY", "CHFJPY", "EURAUD", "GBPUSD"]
+# તમારી નવી વિગતો અહીં અપડેટ કરો
+TOKEN = "8539958945:AAG21BFKKvi_wYPSMh9Utpx3fAM0tagsd5s"
+CHAT_ID = "8539958945"
 
 def send_message(text):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    payload = {"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown"}
+    payload = {"chat_id": CHAT_ID, "text": text}
     requests.post(url, json=payload)
 
-# બોટ ચાલુ થવાનો કન્ફર્મેશન મેસેજ
-send_message("👑 Badshah Bot ઇઝ લાઈવ! હવે સિગ્નલ માટે તૈયાર રહો.")
-
-def get_market_data(symbol):
-    url = "https://api.binance.com/api/v3/klines"
-    params = {"symbol": symbol, "interval": INTERVAL, "limit": 10}
-    response = requests.get(url, params=params).json()
-    # લાઈવ ડેટા પ્રોસેસિંગ...
-    return float(response[-1][4])
-
-# આ લોજિક દર વખતે મેસેજ આવતા ચેક કરશે
-def main():
+def start_bot():
+    send_message("👑 Badshah Bot સક્રિય થઈ ગયો છે! હવે હું લાઈવ માર્કેટ સિગ્નલ આપીશ.")
+    
+    # અહીંથી આપણે દર ૫ સેકન્ડે મેસેજ ચેક કરીશું
+    last_update_id = 0
     while True:
-        url = f"https://api.telegram.org/bot{TOKEN}/getUpdates?offset=-1"
-        data = requests.get(url).json()
-        if "result" in data and len(data["result"]) > 0:
-            msg = data["result"][0]["message"].get("text", "")
-            if msg.lower() in ["signal", "/signal", "/start"]:
-                send_message("🔍 માર્કેટ સ્કેન કરી રહ્યો છું... થોડીવાર રાહ જુઓ.")
-                # અહીં સિગ્નલ લોજિક ઉમેરવું
-                send_message("✅ અત્યારે EUR/USD પર બાય (BUY) સિગ્નલ છે!")
-        time.sleep(5)
+        url = f"https://api.telegram.org/bot{TOKEN}/getUpdates?offset={last_update_id + 1}"
+        try:
+            response = requests.get(url).json()
+            if "result" in response and len(response["result"]) > 0:
+                for update in response["result"]:
+                    last_update_id = update["update_id"]
+                    msg = update["message"].get("text", "").lower()
+                    
+                    if "signal" in msg or "start" in msg:
+                        send_message("✅ સિસ્ટમ તૈયાર છે! ટ્રેડિંગ સેશન માટે બધું ઓકે છે.")
+        except:
+            pass
+        time.sleep(2)
 
 if __name__ == "__main__":
-    main()
+    start_bot()
     
